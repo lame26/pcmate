@@ -15,7 +15,7 @@ import { getPartSpecBadges } from "@/lib/parts/spec-display";
 import { createRecommendedBuildAssembly } from "@/lib/recommendation/build-assembly";
 import { canOpenSummary, getCategoryStep, getMissingRequiredCategories, getNextCategory, getPreviousCategory, requiredBuildCategories } from "@/lib/recommendation/build-progress";
 import { createRecommendationCandidates, getBuilderCategories } from "@/lib/recommendation/candidates";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, useBuildStoreHasHydrated } from "@/stores/build-store";
 import type { RecommendationCandidate, RequirementProfile } from "@/types/diagnosis";
 import type { Confidence } from "@/types/build";
 import type { Part, PartCategory } from "@/types/parts";
@@ -46,6 +46,7 @@ const roleLabels: Record<RecommendationCandidate["role"], string> = {
 };
 
 export function BuilderFlow() {
+  const hasHydrated = useBuildStoreHasHydrated();
   const profile = useBuildStore((state) => state.profile);
   const currentSpec = useBuildStore((state) => state.currentSpec);
   const usage = useBuildStore((state) => state.usage);
@@ -89,6 +90,7 @@ export function BuilderFlow() {
   useEffect(() => {
     const controller = new AbortController();
 
+    if (!hasHydrated) return;
     if (hasCategoryRankSnapshot(activeCategory, priceSnapshots)) return;
 
     void fetch("/api/prices/danawa", {
@@ -109,11 +111,19 @@ export function BuilderFlow() {
       });
 
     return () => controller.abort();
-  }, [activeCategory, priceSnapshots, retryKey, upsertPriceSnapshot]);
+  }, [activeCategory, hasHydrated, priceSnapshots, retryKey, upsertPriceSnapshot]);
 
   const selectedCount = requiredBuildCategories.length - missingCategories.length;
   const selectedCategoryLabels = categories.filter((category) => selectedPartIds[category]).map((category) => categoryLabels[category]);
   const missingCategoryLabels = missingCategories.map((category) => categoryLabels[category]);
+
+  if (!hasHydrated) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/20 p-5 text-sm leading-6 text-muted-foreground">
+        저장된 추천 조건을 불러오는 중입니다.
+      </div>
+    );
+  }
 
   function handleAutoAssemble() {
     const assembly = createRecommendedBuildAssembly({

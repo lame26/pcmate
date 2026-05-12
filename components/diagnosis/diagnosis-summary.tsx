@@ -3,7 +3,7 @@
 import { AlertTriangle, Cpu, MemoryStick, Monitor, Zap } from "lucide-react";
 
 import { calculateRequirementProfile } from "@/lib/diagnosis/requirements";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, useBuildStoreHasHydrated } from "@/stores/build-store";
 
 const metricCopy = {
   cpuTier: {
@@ -29,6 +29,7 @@ const metricCopy = {
 };
 
 export function DiagnosisSummary() {
+  const hasHydrated = useBuildStoreHasHydrated();
   const currentSpec = useBuildStore((state) => state.currentSpec);
   const usage = useBuildStore((state) => state.usage);
   const requirement = calculateRequirementProfile({ currentSpec, usage });
@@ -39,6 +40,14 @@ export function DiagnosisSummary() {
     { key: "ramGb" as const, value: `${requirement.ramGb}GB` },
     { key: "psuWattage" as const, value: `${requirement.psuWattage}W` },
   ];
+
+  if (!hasHydrated) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/20 p-5 text-sm leading-6 text-muted-foreground">
+        저장된 입력 조건을 불러오는 중입니다.
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-6">

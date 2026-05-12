@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { games } from "@/data/games";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, useBuildStoreHasHydrated } from "@/stores/build-store";
 import type { SelectedGame } from "@/types/games";
 
 import { checkboxClassName, inputClassName, selectClassName } from "./field";
@@ -24,6 +24,7 @@ const optionLabels: Record<SelectedGame["optionTarget"], string> = {
 
 export function GamesForm() {
   const [query, setQuery] = useState("");
+  const hasHydrated = useBuildStoreHasHydrated();
   const selectedGames = useBuildStore((state) => state.usage.selectedGames);
   const setSelectedGame = useBuildStore((state) => state.setSelectedGame);
   const removeSelectedGame = useBuildStore((state) => state.removeSelectedGame);
@@ -38,6 +39,14 @@ export function GamesForm() {
   }, [query]);
 
   const selectedById = new Map(selectedGames.map((game) => [game.gameId, game]));
+
+  if (!hasHydrated) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/20 p-5 text-sm leading-6 text-muted-foreground">
+        저장된 게임 선택을 불러오는 중입니다.
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4">

@@ -179,6 +179,8 @@
 - RAM/SSD 추천 후보에서는 안전한 정적 seed 가격을 다나와 매칭 부재 시 표시/정렬 fallback으로만 사용
 - GPU 선택 전 케이스 추천에서 요구 GPU tier 기반 목표 GPU 길이를 적용하고, CPU core/thread 파서의 불가능한 thread count 보강
 - 16GB VRAM만으로 RTX 5090급 halo GPU가 열리지 않도록 GPU premium cap 조건을 추가 보정
+- Zustand/localStorage persist hydrate 완료 전에는 게임/작업/진단/빌더/요약 화면이 빈 기본값으로 계산하지 않도록 hydrate guard 추가
+- Next.js dev server에서 `127.0.0.1:3022` 접속 시 HMR/dev resource가 cross-origin으로 막히지 않도록 `allowedDevOrigins` 설정 추가
 
 진행 예정:
 - 벤치마킹 보고서의 화면별 체크리스트를 이후 UI 구현 완료 기준에 반영
@@ -198,6 +200,42 @@
 ## 최근 작업 히스토리
 
 최근 5개 항목만 유지한다.
+
+### 2026-05-12 입력 상태 hydrate 및 dev origin 보정
+
+문제:
+- 게임이나 작업 조건을 선택한 뒤 다음 화면으로 이동해도 판독/빌더가 선택값을 반영하지 않는 증상이 있었다.
+- 원인은 두 갈래였다. 첫째, persisted Zustand store가 hydrate되기 전 진단/추천 화면이 빈 기본값으로 먼저 계산할 수 있었다.
+- 둘째, dev 서버를 `127.0.0.1:3022`로 열면 Next.js dev resource/HMR이 cross-origin으로 차단되어 React 이벤트가 붙지 않을 수 있었다. 이 경우 체크박스는 브라우저 기본 동작으로 체크된 것처럼 보여도 Zustand 업데이트가 실행되지 않는다.
+
+작업:
+- `stores/build-store.ts`에 `hasHydrated`, `setHasHydrated`, `useBuildStoreHasHydrated()`를 추가했다.
+- persist 저장 대상에서 `hasHydrated`와 action을 제외하고, rehydrate 완료 후에만 저장값 기반 화면을 렌더하도록 했다.
+- 게임/작업 입력, 사양 판독, 빌더, 최종 견적 화면에서 hydrate 전 기본값 계산과 가격 후보 조회를 막았다.
+- `next.config.ts`에 `allowedDevOrigins: ["127.0.0.1"]`를 추가해 `localhost`와 `127.0.0.1` 양쪽 dev 접속을 허용했다.
+- 3022 dev server를 Next 기본 dev server로 재시작했다. 현재 테스트용 URL은 `http://localhost:3022`이며, `http://127.0.0.1:3022`도 허용된다.
+
+주요 파일:
+- `stores/build-store.ts`
+- `components/forms/games-form.tsx`
+- `components/forms/usage-form.tsx`
+- `components/diagnosis/diagnosis-summary.tsx`
+- `components/builder/builder-flow.tsx`
+- `components/summary/summary-view.tsx`
+- `next.config.ts`
+- `docs/work-trigger.md`
+
+검증:
+- `pnpm test` 성공
+- `pnpm lint` 성공
+- `pnpm build` 성공
+- `http://localhost:3022/diagnosis` HTTP 200 확인
+- `http://127.0.0.1:3022/diagnosis` HTTP 200 확인
+- Chrome CDP로 `127.0.0.1:3022`에서 PUBG 선택 + Docker 작업 선택 후 `/diagnosis` 이동을 검증했다. localStorage에 `selectedGames: [{ gameId: "pubg", frequency: "normal", optionTarget: "high" }]`, `workApps: ["docker"]`가 남고, 판독 결과에 CPU 8/10, GPU 8/10, RAM 32GB, PSU 750W와 배틀그라운드/개발 작업 근거가 표시됐다.
+
+남은 한계:
+- dev server는 현재 로컬 테스트 편의를 위해 열어 둔 상태다. 서버 재시작이 필요하면 `pnpm exec next dev -p 3022`를 사용한다.
+- 사용자가 기존에 `127.0.0.1`과 `localhost`를 번갈아 쓴 경우 localStorage origin이 다르므로, 같은 테스트 시나리오는 같은 host로 다시 입력해야 한다.
 
 ### 2026-05-12 Halo GPU VRAM signal 정책 보정
 
@@ -324,41 +362,6 @@
 남은 한계:
 - complete-build summary 상태는 별도 브라우저 자동화 패키지 없이 localStorage 시드가 어려워 실제 선택 완료 상태까지는 수동 브라우저 QA가 필요하다.
 - 모바일 sticky next-step CTA, 데스크톱 sticky summary/CTA rail, 광범위한 UI copy/token 정리는 이번 범위에서 제외했다.
-
-### 2026-05-12 일반 최저가/혜택 최저가 분리 표시
-
-작업:
-- `lib/pricing/price-display.ts`를 추가해 `PriceOffer`의 일반가, 배송비, 혜택가, 보유 카드 매칭 여부, 조건 문구를 표시용 모델로 정리했다.
-- 보유 카드와 `cardProviderId`가 일치하는 경우만 `내 혜택가`로 표시하고 합계 반영가에 사용한다.
-- 카드가 일치하지 않는 혜택가는 `{카드명} 혜택가`로 보여주되 합계 반영가에서 제외한다.
-- 카드/쿠폰 조건을 특정하지 못하는 혜택가는 `조건부 혜택가`로 보여주고 내 혜택가로 계산하지 않는다.
-- `components/pricing/price-breakdown.tsx`를 추가해 후보 카드와 최종 견적에서 같은 의미 체계로 선택 가격 일반가, 혜택가, 배송비, 혜택 조건/주의사항을 표시한다.
-- 빌더 후보 카드의 단일 가격 문구를 `합계 반영가`와 상세 가격 분리 표시로 바꿨다.
-- 최종 견적 라인 아이템에서 단일 가격 숫자 대신 가격 breakdown을 표시하고, 합계 라벨을 `일반가+배송비 합계`, `내 혜택 반영 합계`로 명확히 바꿨다.
-- 텍스트 복사 출력에서도 각 부품의 일반가, 내 혜택가, 배송비, 합계 반영가를 구분한다.
-- `docs/feature-backlog.md`의 P1 일반 최저가/혜택 최저가 분리 표시 항목을 `done`으로 정리했다.
-
-주요 파일:
-- `components/pricing/price-breakdown.tsx`
-- `components/builder/builder-flow.tsx`
-- `components/summary/summary-view.tsx`
-- `lib/pricing/price-display.ts`
-- `lib/pricing/price-display.test.ts`
-- `lib/summary/build-summary.ts`
-- `docs/feature-backlog.md`
-- `docs/work-trigger.md`
-
-검증:
-- `pnpm test lib/pricing/price-display.test.ts lib/summary/build-summary.test.ts` 성공
-- `pnpm test` 성공
-- `pnpm lint` 성공
-- `pnpm build` 성공
-- PM 리뷰 후 `일반 최저가` 오해 가능성을 줄이기 위해 `선택 가격 일반가`로 라벨을 낮췄고, 텍스트 복사 출력의 배송비 제외/포함 금액 구분 테스트를 보강했다.
-
-남은 한계:
-- 후보 카드 안에 가격 breakdown과 호환성 상세가 함께 있어 모바일 카드 밀도는 별도 Design/UX QA가 필요하다.
-- Design/UX report-only QA는 지시된 상태이나, 이 문서 갱신 시점에는 아직 결과 리포트가 도착하지 않았다.
-- 가격 선택/정렬 정책은 기존 로직을 유지했고, 이번 작업은 표시와 합계 라벨 명확화에 집중했다.
 
 ## 보존 기록
 

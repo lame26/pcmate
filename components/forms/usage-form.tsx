@@ -1,7 +1,7 @@
 "use client";
 
 import type { MonitorProfile } from "@/types/games";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, useBuildStoreHasHydrated } from "@/stores/build-store";
 
 import { checkboxClassName, Field, selectClassName } from "./field";
 
@@ -26,6 +26,7 @@ const workApps = [
 ];
 
 export function UsageForm() {
+  const hasHydrated = useBuildStoreHasHydrated();
   const usage = useBuildStore((state) => state.usage);
   const setMultitasking = useBuildStore((state) => state.setMultitasking);
   const toggleConcurrentApp = useBuildStore((state) => state.toggleConcurrentApp);
@@ -35,6 +36,14 @@ export function UsageForm() {
 
   const monitor = usage.monitors[0] ?? { resolution: "FHD", refreshRateTier: "144-180", count: 1 };
   const updateMonitor = (patch: Partial<MonitorProfile>) => setMonitors([{ ...monitor, ...patch }]);
+
+  if (!hasHydrated) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/20 p-5 text-sm leading-6 text-muted-foreground">
+        저장된 작업 조건을 불러오는 중입니다.
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-6">

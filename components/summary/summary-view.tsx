@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { getPartSpecBadges } from "@/lib/parts/spec-display";
 import { getMissingRequiredCategories } from "@/lib/recommendation/build-progress";
 import { createFinalBuildSummary, createSummaryText, categoryLabel, formatKrw, getSummaryItemName } from "@/lib/summary/build-summary";
-import { useBuildStore } from "@/stores/build-store";
+import { useBuildStore, useBuildStoreHasHydrated } from "@/stores/build-store";
 import type { Part, PartCategory } from "@/types/parts";
 
 export function SummaryView() {
+  const hasHydrated = useBuildStoreHasHydrated();
   const selectedPartIds = useBuildStore((state) => state.selectedPartIds);
   const priceSnapshots = useBuildStore((state) => state.priceSnapshots);
   const selectedCardProviderIds = useBuildStore((state) => state.profile.selectedCardProviderIds);
@@ -32,6 +33,14 @@ export function SummaryView() {
   const isBlocked = summary.status === "blocked";
   const needsCheck = summary.status === "needs-check";
   const isIncomplete = missingCategories.length > 0;
+
+  if (!hasHydrated) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/20 p-5 text-sm leading-6 text-muted-foreground">
+        저장된 선택 부품을 불러오는 중입니다.
+      </div>
+    );
+  }
 
   async function handleCopyText() {
     try {

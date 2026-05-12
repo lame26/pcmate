@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -17,6 +18,7 @@ import type { CurrentPcSpec } from "@/types/spec";
 
 type BuildStoreState = {
   schemaVersion: 1;
+  hasHydrated: boolean;
   profile: UserProfile;
   currentSpec: CurrentPcSpec;
   usage: UsageProfile;
@@ -45,6 +47,7 @@ type BuildStoreState = {
   removePriceSnapshot: (snapshotId: string) => void;
   selectPart: (category: PartCategory, partId: string) => void;
   clearSelectedPart: (category: PartCategory) => void;
+  setHasHydrated: (hasHydrated: boolean) => void;
   reset: () => void;
 };
 
@@ -72,6 +75,7 @@ const defaultPreferences: UserPreferences = {
 
 const initialState = {
   schemaVersion: 1 as const,
+  hasHydrated: false,
   profile: {
     id: "local-profile",
     buildMode: "full-build" as const,
@@ -114,6 +118,7 @@ export const useBuildStore = create<BuildStoreState>()(
   persist(
     (set) => ({
       ...initialState,
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
       setBuildMode: (buildMode) =>
         set((state) => ({
           profile: { ...state.profile, buildMode, updatedAt: now() },
@@ -281,12 +286,47 @@ export const useBuildStore = create<BuildStoreState>()(
             updatedAt: now(),
           };
         }),
-      reset: () => set({ ...initialState, updatedAt: now() }),
+      reset: () => set({ ...initialState, hasHydrated: true, updatedAt: now() }),
     }),
     {
       name: "pcmate.build.v1",
       storage: createJSONStorage(() => localStorage),
       version: 1,
+      partialize: (state) => ({
+        schemaVersion: state.schemaVersion,
+        profile: state.profile,
+        currentSpec: state.currentSpec,
+        usage: state.usage,
+        priceSnapshots: state.priceSnapshots,
+        selectedPartIds: state.selectedPartIds,
+        updatedAt: state.updatedAt,
+      }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
     }
   )
 );
+
+export function useBuildStoreHasHydrated() {
+  const hasHydrated = useBuildStore((state) => state.hasHydrated);
+  const setHasHydrated = useBuildStore((state) => state.setHasHydrated);
+
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = useBuildStore.persist.onFinishHydration(() => {
+      if (!cancelled) setHasHydrated(true);
+    });
+
+    void Promise.resolve(useBuildStore.persist.rehydrate()).finally(() => {
+      if (!cancelled) setHasHydrated(true);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [setHasHydrated]);
+
+  return hasHydrated;
+}
