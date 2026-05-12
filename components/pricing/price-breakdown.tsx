@@ -25,7 +25,7 @@ export function PriceBreakdown({ offer, selectedCardProviderIds, compact = false
   return (
     <div className={cn("grid gap-2 rounded-md border bg-muted/20 p-3", className)}>
       <div className={cn("grid gap-2", compact ? "" : "sm:grid-cols-3")}>
-        <PriceCell label="선택 가격 일반가" value={formatKrw(price.normalPrice)} helper="현재 매칭 상품의 배송비 제외 가격" />
+        <PriceCell label="일반가(배송비 제외)" value={formatKrw(price.normalPrice)} helper="현재 매칭 상품 기준" />
         <PriceCell
           label={price.benefitLabel}
           value={price.benefitPrice !== undefined ? formatKrw(price.benefitPrice) : "없음"}
@@ -43,7 +43,7 @@ export function PriceBreakdown({ offer, selectedCardProviderIds, compact = false
 
       <div className="grid gap-1 rounded-md bg-background px-3 py-2 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-muted-foreground">합계 반영가</span>
+          <span className="text-muted-foreground">반영가</span>
           <span className="font-semibold">{formatKrw(price.selectedTotal)}</span>
         </div>
         {price.benefitTotal !== undefined && price.benefitStatus !== "matched-card" ? (

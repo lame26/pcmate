@@ -415,7 +415,7 @@ function CandidateCard({
 
       <div className="grid gap-2">
         <div className="grid gap-1">
-          <p className="text-xs text-muted-foreground">합계 반영가</p>
+          <p className="text-xs text-muted-foreground">이 후보 반영가</p>
           <p className="text-xl font-semibold">{candidate.effectivePrice ? formatKrw(candidate.effectivePrice) : "가격 확인 필요"}</p>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -452,7 +452,6 @@ function CandidateCard({
         selectedParts={candidateCompatibilityParts}
         title="후보 호환성 상세"
         compact
-        defaultOpen={compatibilityStatus !== "compatible"}
       />
 
       <Button type="button" onClick={onSelect} disabled={critical} variant={selected ? "secondary" : "default"}>

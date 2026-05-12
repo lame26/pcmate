@@ -68,11 +68,11 @@ export function SummaryView() {
       <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
         <Button type="button" variant="outline" onClick={handleCopyText} disabled={!summary.items.length || isBlocked || isIncomplete}>
           <Clipboard data-icon="inline-start" />
-          {copyState === "done" ? "복사됨" : copyState === "error" ? "복사 실패" : needsCheck ? "경고 포함 텍스트 복사" : "텍스트 복사"}
+          {isIncomplete ? "부품 선택 후 복사 가능" : copyState === "done" ? "복사됨" : copyState === "error" ? "복사 실패" : needsCheck ? "경고 포함 텍스트 복사" : "텍스트 복사"}
         </Button>
         <Button type="button" onClick={handleSaveImage} disabled={!summary.items.length || isSavingImage || isBlocked || isIncomplete}>
           <Download data-icon="inline-start" />
-          {isSavingImage ? "저장 중" : needsCheck ? "경고 포함 이미지 저장" : "이미지 저장"}
+          {isIncomplete ? "부품 선택 후 이미지 저장 가능" : isSavingImage ? "저장 중" : needsCheck ? "경고 포함 이미지 저장" : "이미지 저장"}
         </Button>
       </div>
 
@@ -85,26 +85,23 @@ export function SummaryView() {
           <div className="text-sm text-neutral-500">{new Date().toLocaleString("ko-KR")}</div>
         </header>
 
-        <section className={`rounded-md border p-4 ${statusClassName(summary.status)}`}>
-          <p className="text-sm font-semibold">호환성 결과: {statusLabel(summary.status)}</p>
-          <p className="mt-2 text-sm leading-6">{summary.statusMessage}</p>
-          {summary.status === "blocked" ? (
+        <section className={`rounded-md border p-4 ${statusClassName(summary.status, isIncomplete)}`}>
+          <p className="text-sm font-semibold">{isIncomplete ? "필수 부품 미선택" : `호환성 결과: ${statusLabel(summary.status)}`}</p>
+          <p className="mt-2 text-sm leading-6">
+            {isIncomplete
+              ? `최종 견적을 만들려면 남은 필수 부품을 먼저 선택해야 합니다. 남은 부품: ${missingCategories.map((category) => categoryLabel(category)).join(", ")}`
+              : summary.statusMessage}
+          </p>
+          {!isIncomplete && summary.status === "blocked" ? (
             <p className="mt-2 text-sm leading-6">
               이 조합은 조립 또는 부팅이 불가능할 수 있어 복사/이미지 저장을 막았습니다. 아래 문제를 해결한 뒤 다시 확인하세요.
             </p>
           ) : null}
-          {summary.status === "needs-check" ? (
+          {!isIncomplete && summary.status === "needs-check" ? (
             <p className="mt-2 text-sm leading-6">확인 필요 항목이 남아 있어 구매 CTA는 제공하지 않습니다. 아래 항목을 확인한 뒤 구매하세요.</p>
           ) : null}
           <p className="mt-2 text-xs leading-5">혜택가 합계는 카드/쿠폰/배송비 조건에 따라 달라질 수 있는 조건부 예상가입니다.</p>
         </section>
-
-        <CompatibilityDetails
-          result={summary.compatibility}
-          selectedParts={selectedParts}
-          title="부품별 호환성 상세"
-          defaultOpen={summary.compatibility.status !== "compatible"}
-        />
 
         {isIncomplete ? (
           <section className="rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950">
@@ -152,6 +149,12 @@ export function SummaryView() {
           <SummaryMetric label="배송비 합계" value={formatKrw(summary.shippingTotal)} />
         </section>
 
+        <CompatibilityDetails
+          result={summary.compatibility}
+          selectedParts={selectedParts}
+          title={summary.compatibility.status === "needs-check" ? `구매 전 확인 ${summary.compatibility.summary.needsCheck}건` : "부품별 호환성 상세"}
+        />
+
         {summary.warnings.length ? (
           <section className="grid gap-3 border-t pt-5">
             <div className="flex items-center gap-2">
@@ -185,7 +188,8 @@ function statusLabel(status: "ready" | "needs-check" | "blocked") {
   return "구매 가능 후보";
 }
 
-function statusClassName(status: "ready" | "needs-check" | "blocked") {
+function statusClassName(status: "ready" | "needs-check" | "blocked", isIncomplete = false) {
+  if (isIncomplete) return "border-amber-300 bg-amber-50 text-amber-950";
   if (status === "blocked") return "border-red-300 bg-red-50 text-red-950";
   if (status === "needs-check") return "border-amber-300 bg-amber-50 text-amber-950";
   return "border-emerald-300 bg-emerald-50 text-emerald-950";

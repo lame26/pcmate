@@ -145,6 +145,48 @@ describe("normalizeDanawaOfferToPart", () => {
     });
   });
 
+  it("parses CPU core and thread counts only from explicit core/thread text", () => {
+    const cpu = normalizeDanawaOfferToPart(
+      createOffer("cpu", {
+        productName: "AMD Ryzen 7 7800X3D 5th Gen",
+        metadata: {
+          cpuSocket: "AM5",
+          cpuSeries: "Ryzen 7000",
+          danawaSpecText: "AMD Ryzen 7 7800X3D 5th Gen / 8C / 16T / 120W",
+        },
+      }),
+      "cpu"
+    );
+
+    expect(cpu?.specs).toMatchObject({
+      kind: "cpu",
+      cores: 8,
+      threads: 16,
+    });
+  });
+
+  it("does not keep impossible CPU thread counts from noisy metadata", () => {
+    const cpu = normalizeDanawaOfferToPart(
+      createOffer("cpu", {
+        productName: "AMD Ryzen 7 7800X3D 5th Gen",
+        metadata: {
+          cpuSocket: "AM5",
+          cpuSeries: "Ryzen 7000",
+          cpuCoreText: "8 cores",
+          cpuThreadText: "5th Gen",
+          danawaSpecText: "AMD Ryzen 7 7800X3D 5th Gen / 8 cores / 16 threads",
+        },
+      }),
+      "cpu"
+    );
+
+    expect(cpu?.specs).toMatchObject({
+      kind: "cpu",
+      cores: 8,
+      threads: 16,
+    });
+  });
+
   it("does not normalize sammy CSV snapshots into Part candidates", () => {
     const parts = normalizeDanawaSnapshotsToParts([
       {

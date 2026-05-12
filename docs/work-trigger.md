@@ -168,6 +168,17 @@
 - `CompatibilityIssue`의 severity/status/evidence/source/userAction과 `CompatibilityResult`의 canRecommend/canPurchase/canExport 정책 표시
 - 후보 카드와 최종 견적 화면에서 일반가, 내 혜택가, 타 카드/조건부 혜택가, 배송비, 혜택 조건을 분리 표시
 - `PriceOffer` 기반 가격 표시 helper를 추가해 보유 카드와 일치하는 혜택만 합계 반영가로 강조
+- Design/UX QA must-fix 기준으로 빌더 후보 카드의 호환성 상세를 compact 기본 접힘 상태로 정리
+- 최종 견적 화면에서 필수 부품 미선택 상태를 primary 상태로 표시하고 복사/이미지 저장 disabled 문구를 명확화
+- 최종 견적 화면의 호환성 상세를 가격/선택 부품 아래의 접힌 패널로 이동
+- 후보 카드와 가격 breakdown의 가격 라벨을 `이 후보 반영가`, `일반가(배송비 제외)`, `반영가` 중심으로 정리
+- 추천 후보 role 배정이 절대 최저가/최고 티어를 섞던 문제를 category-aware 정책으로 보정
+- CPU/GPU/SSD/PSU/RAM/쿨러 후보를 요구치 주변 band, 최소 용량/와트, 가격 존재 여부 기준으로 선별
+- Ryzen 5600급+9850X3D급, RTX 5060급+5090급, 240GB SSD, 500W+1200W PSU 같은 비정상 조합 회귀 테스트 추가
+- FHD/PUBG 비enthusiast 요구치에서 RTX 5090급 GPU와 9850X3D급 halo CPU가 기본 premium 후보로 나오지 않도록 추가 제한
+- RAM/SSD 추천 후보에서는 안전한 정적 seed 가격을 다나와 매칭 부재 시 표시/정렬 fallback으로만 사용
+- GPU 선택 전 케이스 추천에서 요구 GPU tier 기반 목표 GPU 길이를 적용하고, CPU core/thread 파서의 불가능한 thread count 보강
+- 16GB VRAM만으로 RTX 5090급 halo GPU가 열리지 않도록 GPU premium cap 조건을 추가 보정
 
 진행 예정:
 - 벤치마킹 보고서의 화면별 체크리스트를 이후 UI 구현 완료 기준에 반영
@@ -178,7 +189,7 @@
 - 실제 다나와 snapshot 로그를 수집해 strict matcher alias와 parser를 점진적으로 보강
 - 카드형 설문 UX 전체 개편은 별도 작업으로 진행
 - 후보 가로 스크롤/더 많은 후보 노출은 별도 작업으로 진행
-- Design/UX Codex에게 `/builder`, `/summary`의 후보 카드/최종 견적 밀도, 모바일 스크롤 부담, 가격/호환성 라벨 이해도에 대한 report-only QA를 지시해둔 상태이며, 다음 세션에서 리포트를 받아 PM 리뷰 후 visual follow-up 범위를 결정한다.
+- 모바일 sticky next-step CTA와 데스크톱 sticky summary/CTA rail은 별도 Design/UX follow-up으로 남겨둔다.
 
 보류:
 - 직접 다나와 페이지 크롤링은 MVP에 구현했지만, 공개/상업 배포 전 robots.txt, 이용약관, 요청 제한, 캐시 정책 검토가 필요
@@ -187,6 +198,132 @@
 ## 최근 작업 히스토리
 
 최근 5개 항목만 유지한다.
+
+### 2026-05-12 Halo GPU VRAM signal 정책 보정
+
+문제:
+- premium cap live verification에서 FHD 144-180Hz PUBG medium 기본 시나리오는 정상화됐지만, Cyberpunk 2077 rare/medium을 추가해 `vramGb`가 16GB가 된 인접 시나리오에서 RTX 5090이 다시 premium 후보로 나타났다.
+- 원인은 `requirement.vramGb >= 16`을 halo GPU 허용 신호로 직접 취급한 것이다. 16GB VRAM은 RTX 5080/RX 9070 XT급 후보를 정당화할 수 있지만, RTX 5090급을 단독으로 정당화하기에는 너무 넓다.
+
+작업:
+- `lib/recommendation/candidates.ts`의 `allowsHaloGpu`에서 `requirement.vramGb >= 16` 조건을 제거했다.
+- tier-10 GPU는 `gpuTier >= 10`, 1000W급 요구, 4K/UWQHD/VR/local AI/extreme reason text, 또는 유연한 고예산 같은 더 강한 신호가 있을 때만 policy pool에 들어갈 수 있게 유지했다.
+- GPU tier 9 + VRAM 16GB + 비enthusiast 조건에서는 RX 9070 XT/RTX 5080급은 유지하고 RTX 5090은 제외하는 회귀 테스트를 추가했다.
+- 4K high refresh reason text가 있는 true enthusiast 조건에서는 RTX 5090이 여전히 후보가 될 수 있음을 테스트로 고정했다.
+
+주요 파일:
+- `lib/recommendation/candidates.ts`
+- `lib/recommendation/candidates.test.ts`
+- `docs/work-trigger.md`
+
+검증:
+- `pnpm test lib/recommendation/candidates.test.ts` 성공
+- `pnpm test` 성공
+- `pnpm lint` 성공
+- `pnpm build` 성공
+- `git diff --check` 성공
+
+남은 한계:
+- halo GPU 허용은 여전히 `RequirementProfile`의 tier/PSU/reason text/budget 기반 추정이다. monitor/VR/local AI 원본 입력을 candidate policy가 직접 받는 구조는 아니다.
+- 실제 live snapshot에서 인접 VRAM 16GB 시나리오를 다시 확인하는 수동 QA가 남아 있다.
+
+### 2026-05-12 추천 premium cap 및 fallback 가격 보강
+
+문제:
+- category-aware 보정 후에도 FHD 144-180Hz PUBG medium, VR/로컬 AI/캡처/특수 냉각/예산/브랜드 선호 없음 조건에서 RTX 5090과 Ryzen 7 9850X3D가 premium 후보로 남았다.
+- RAM/SSD는 안전한 정적 seed 가격이 있어도 다나와 매칭이 없으면 후보 카드에서 `가격 확인 필요`로 보일 수 있었다.
+- GPU 선택 전 케이스 후보에 270mm급 GPU 길이 제한 케이스가 고성능 GPU 요구치보다 먼저 보일 수 있었다.
+- CPU 정규화에서 `5세대` 같은 텍스트를 thread count로 잘못 읽어 8C/5T 같은 불가능한 표시가 나올 수 있었다.
+
+작업:
+- `lib/recommendation/candidates.ts`에서 비enthusiast 요구치의 CPU/GPU premium 상한을 보강했다. GPU tier 10/halo급은 4K/UWQHD, VR, 로컬 AI, extreme 텍스트, 매우 높은 요구치, 유연한 고예산 같은 신호가 있을 때만 허용한다.
+- CPU는 7800X3D급 게이밍 후보는 유지하되 7950X3D/7900X3D/9950X3D/9850X3D 같은 top X3D 후보를 비enthusiast 기본 후보에서 제외한다.
+- role 후보를 고를 때 budget/recommended/premium이 같은 후보로 중복 선택된 뒤 dedupe되어 카드가 줄어드는 문제를 막기 위해 각 role 선택 직후 selected map에 반영한다.
+- RAM/SSD에 한해 다나와 strict match가 없을 때 안전한 정적 seed offer를 추천 후보 가격 fallback으로 사용한다. 최종 견적 합계의 정적 가격 제외 정책은 변경하지 않았다.
+- 케이스 후보는 GPU 미선택 상태에서도 `requirement.gpuTier`로 목표 GPU 길이를 추정해 고성능 GPU tier에서 270mm급 케이스를 제외한다.
+- `lib/parts/danawa-normalizer.ts`에서 CPU core/thread는 명시적인 core/thread 단위 텍스트에서만 추출하고, thread가 core보다 작은 불가능한 값은 버린다.
+
+주요 파일:
+- `lib/recommendation/candidates.ts`
+- `lib/recommendation/candidates.test.ts`
+- `lib/parts/danawa-normalizer.ts`
+- `lib/parts/danawa-normalizer.test.ts`
+- `docs/work-trigger.md`
+
+검증:
+- `pnpm test lib/recommendation/candidates.test.ts lib/parts/danawa-normalizer.test.ts` 성공
+- `pnpm test` 성공
+- `pnpm lint` 성공
+- `pnpm build` 성공
+- `git diff --check` 성공
+
+남은 한계:
+- enthusiast 판정은 현재 `RequirementProfile`의 tier/VRAM/RAM/PSU, budget, reason/warning 텍스트에 의존한다. monitor/VR/local AI 원본 입력을 candidate policy가 직접 받지는 않는다.
+- RAM/SSD 정적 seed 가격 fallback은 추천 후보 표시/정렬용이며, 최종 견적 합계 정책은 기존처럼 별도 요약 경로가 판단한다.
+- 실제 다나와 metadata 누락이 많은 snapshot에서는 후보 수가 줄어들 수 있어 parser/matcher 보강이 계속 필요하다.
+
+### 2026-05-12 카테고리별 추천 후보 품질 보정
+
+문제:
+- 빌더 후보 role 배정이 카테고리 맥락 없이 `budget=최저가`, `recommended=최고 점수`, `premium=최고 성능 티어`로 동작했다.
+- 그 결과 CPU에서 Ryzen 5600급과 9850X3D급, GPU에서 RTX 5060급과 RTX 5090급, SSD에서 240GB, PSU에서 500W와 1200W가 같은 요구치 후보로 함께 보일 수 있었다.
+- 가격 없는 RAM/쿨러 후보가 가격 있는 유사 후보보다 앞에 나올 수 있었다.
+
+작업:
+- `lib/recommendation/candidates.ts`에 category-aware 후보 정책을 추가해 role 선정을 요구치 주변 band 안에서 수행하도록 바꿨다.
+- CPU는 정상 full-build mid/high 요구치에서 AM4/Ryzen 5000 mainstream급을 제외하고, premium도 요구치 +1 tier 중심으로 제한했다.
+- GPU는 `requirement.gpuTier`와 `requirement.vramGb` 기준으로 인접 tier와 최소 VRAM을 만족하는 후보만 role 후보로 사용한다.
+- SSD는 full-build MVP 기본 최소 추천 용량을 1TB로 두어 240GB/저용량 SSD가 일반 추천 role에 들어가지 않게 했다.
+- PSU는 `requirement.psuWattage`와 선택 GPU 권장 PSU를 기준으로 wattage band를 만들고, 정상 mid/high 요구치에서 1200W급 과잉 후보를 제외했다.
+- RAM은 요구 용량 미만을 제외하고, 가격 있는 후보가 있으면 가격 없는 동급 후보를 role 후보에서 밀어냈다.
+- 쿨러는 CPU heat class와 선호도 기준으로 360mm AIO를 제한하고, 정상 CPU 요구치에서는 공랭/적정급 후보를 우선한다.
+- 가격 없는 후보에는 점수 penalty를 추가하고, 가격 있는 후보가 있으면 role 선정 pool을 가격 있는 후보로 제한했다.
+
+주요 파일:
+- `lib/recommendation/candidates.ts`
+- `lib/recommendation/candidates.test.ts`
+- `docs/work-trigger.md`
+
+검증:
+- `pnpm test lib/recommendation/candidates.test.ts lib/recommendation/build-assembly.test.ts` 성공
+- `pnpm test` 성공
+- `pnpm lint` 성공
+- `pnpm build` 성공
+
+남은 한계:
+- 카테고리 정책은 현재 정적/다나와 정규화 스펙의 `gamingTier`, 용량, 와트, VRAM 추정값에 의존한다.
+- 실제 다나와 랭킹 데이터에서 상품명/스펙 누락이 많으면 후보가 줄어들 수 있어 snapshot 기반 보강이 계속 필요하다.
+- 사용자에게 enthusiast/broad-budget 의도를 명시적으로 받는 UX는 아직 없다.
+
+### 2026-05-12 Design/UX must-fix UI 밀도 정리
+
+작업:
+- `components/compatibility/compatibility-details.tsx`의 compact 모드에서 호환성 요약을 먼저 보여주고, 접힌 상세 안에서도 `pass` 행은 생략하도록 변경했다.
+- 빌더 후보 카드의 `후보 호환성 상세`는 기본 접힘 상태로 두어 needs-check/blocked 후보가 카드 높이를 과도하게 늘리지 않게 했다.
+- 최종 견적 화면에서 `필수 부품 미선택`을 primary 상태로 표시하고, 복사/이미지 저장 버튼 disabled 문구를 `부품 선택 후 복사 가능`, `부품 선택 후 이미지 저장 가능`으로 바꿨다.
+- 최종 견적 화면의 상세 호환성 패널은 선택 부품과 가격 합계 아래로 이동하고 기본 접힘 상태로 유지했다.
+- 후보 카드 가격 대표 라벨을 `이 후보 반영가`로 낮추고, 가격 breakdown 내부 라벨을 `일반가(배송비 제외)`, `반영가`로 정리했다.
+- `pnpm test`가 untracked `qa-chrome-profile` 내부 브라우저 확장 테스트 파일까지 수집해 실패하던 문제를 막기 위해 `vitest.config.ts`에 `qa-chrome-profile/**`, `qa-screenshots/**` exclude를 추가했다.
+
+주요 파일:
+- `components/compatibility/compatibility-details.tsx`
+- `components/builder/builder-flow.tsx`
+- `components/summary/summary-view.tsx`
+- `components/pricing/price-breakdown.tsx`
+- `vitest.config.ts`
+- `docs/work-trigger.md`
+
+검증:
+- `pnpm test` 첫 실행은 기존 untracked `qa-chrome-profile` 안의 Chrome extension test 파일 수집 때문에 실패했다.
+- `vitest.config.ts` exclude 추가 후 `pnpm test` 성공
+- `pnpm lint` 첫 실행은 124초 timeout, 300초 timeout으로 재실행 성공
+- `pnpm build` 성공
+- 기존 dev server `http://localhost:3022`에서 `/builder`, `/summary` HTTP 200 확인
+- Chrome headless mobile width로 `/builder` 후보 카드 compact 상태와 `/summary` 필수 부품 미선택 상태 확인
+
+남은 한계:
+- complete-build summary 상태는 별도 브라우저 자동화 패키지 없이 localStorage 시드가 어려워 실제 선택 완료 상태까지는 수동 브라우저 QA가 필요하다.
+- 모바일 sticky next-step CTA, 데스크톱 sticky summary/CTA rail, 광범위한 UI copy/token 정리는 이번 범위에서 제외했다.
 
 ### 2026-05-12 일반 최저가/혜택 최저가 분리 표시
 
@@ -222,142 +359,6 @@
 - 후보 카드 안에 가격 breakdown과 호환성 상세가 함께 있어 모바일 카드 밀도는 별도 Design/UX QA가 필요하다.
 - Design/UX report-only QA는 지시된 상태이나, 이 문서 갱신 시점에는 아직 결과 리포트가 도착하지 않았다.
 - 가격 선택/정렬 정책은 기존 로직을 유지했고, 이번 작업은 표시와 합계 라벨 명확화에 집중했다.
-
-### 2026-05-12 호환성 결과 UX 고도화
-
-작업:
-- `lib/compatibility/display.ts`를 추가해 기존 `CompatibilityResult`와 `SelectedParts`를 CPU-보드, 보드-RAM, 보드-케이스, GPU-케이스, 쿨러-케이스, 쿨러-CPU, 파워-GPU/CPU, 보드-SSD 행 단위 표시 모델로 정렬했다.
-- `components/compatibility/compatibility-details.tsx`를 추가해 pass / needs-check / blocked / 선택 후 확인 상태를 같은 UI로 표시한다.
-- 각 issue의 code, severity, status, message, userAction, evidence source/field/value/confidence를 상세 패널에서 확인할 수 있게 했다.
-- `canRecommend`, `canPurchase`, `canExport` 정책을 추천/구매/복사·저장 가능 여부 배지로 표시했다.
-- 빌더 후보 카드에 compact 호환성 상세 패널을 연결했다. needs-check/blocked 후보는 기본으로 펼쳐 이유와 확인 항목을 바로 보여준다.
-- 빌더 하단 최종 조합 영역과 최종 견적 화면에도 같은 호환성 상세 패널을 연결했다.
-- 최종 견적 summary 모델에 원본 `compatibility` 결과를 포함해 warning 변환 전의 상세 데이터를 UI에서 사용할 수 있게 했다.
-- `docs/feature-backlog.md`에서 이미 구현된 빌더 CTA 분리, 후보 로딩 상태 개선, 호환성 결과 UX 고도화 항목을 `done`으로 정리했다.
-
-주요 파일:
-- `components/compatibility/compatibility-details.tsx`
-- `components/builder/builder-flow.tsx`
-- `components/summary/summary-view.tsx`
-- `lib/compatibility/display.ts`
-- `lib/compatibility/display.test.ts`
-- `lib/summary/build-summary.ts`
-- `docs/feature-backlog.md`
-- `docs/work-trigger.md`
-
-검증:
-- `pnpm test` 성공
-- `pnpm lint` 성공
-- `pnpm build` 첫 실행은 sandbox 네트워크 제한으로 Google Fonts fetch 실패, 승인 후 재실행 성공
-- `pnpm exec next start -p 3001`로 빌드 결과 서버 기동 성공
-- `curl -I http://localhost:3001/builder` 성공, HTTP 200
-- `curl -I http://localhost:3001/summary` 성공, HTTP 200
-
-남은 한계:
-- `agent-browser` CLI가 설치되어 있지 않아 실제 브라우저 viewport/interaction QA는 수행하지 못했다.
-- 이번 작업은 판정 로직을 크게 바꾸지 않고 기존 issue를 표시하는 UI/데이터 정렬 작업이다.
-- 후보 가로 스크롤/더 많은 후보 노출은 별도 작업이다.
-
-### 2026-05-12 빌더 CTA와 최종 견적 진입 UX 정리
-
-작업:
-- `lib/recommendation/build-progress.ts`를 추가해 필수 부품 누락 계산, 최종 견적 진입 가능 여부, 다음/이전 카테고리 계산을 분리했다.
-- 필수 부품 기준은 현재 빌더 카테고리와 동일하게 CPU, 쿨러, 메인보드, RAM, GPU, SSD, 파워, 케이스로 둔다.
-- 빌더 상단에 현재 단계, 전체 진행률, 선택 완료 부품, 남은 부품을 표시했다.
-- 기본 CTA를 `다음: {부품} 선택`으로 두고, 현재 카테고리 후보를 선택하기 전에는 다음 이동을 비활성화했다.
-- `최종 견적 보기`는 빌더 내부의 별도 CTA로 분리하고, 필수 부품이 모두 선택되지 않으면 비활성화한다.
-- 필수 부품 완료 후 최종 호환성이 `compatible`이면 `최종 견적 보기`, `needs-check`이면 `확인 필요 항목 포함 견적 보기`, `blocked`이면 `호환성 문제 해결 필요`로 표시한다.
-- 후보 로딩 중에는 이전 후보 카드를 노출하지 않고 skeleton 상태와 `조건에 맞는 후보를 계산하고 있습니다` 문구를 표시한다.
-- 후보 조회 실패 상태와 안전 후보 없음 상태를 분리했다.
-- 자동 추천 버튼 문구를 `안전한 추천 견적 자동 구성`으로 바꾸고, 실패 시 기존 선택을 유지하면서 blocker 또는 남은 부품 이유를 표시한다.
-- summary 화면에서 필수 부품 누락 시 남은 부품을 표시하고 복사/이미지 저장을 비활성화했다.
-
-주요 파일:
-- `components/builder/builder-flow.tsx`
-- `components/summary/summary-view.tsx`
-- `app/builder/page.tsx`
-- `lib/recommendation/build-progress.ts`
-- `lib/recommendation/build-progress.test.ts`
-- `docs/work-trigger.md`
-
-검증:
-- `pnpm test` 성공
-- `pnpm lint` 성공
-- `pnpm build` 성공
-
-남은 한계:
-- 카드형 설문 UX 전체 개편은 별도 작업이다.
-- 후보 가로 스크롤/더 많은 후보 노출은 별도 작업이다.
-- 호환성 결과 팝업/다나와식 부품별 시각화는 별도 작업이다.
-
-### 2026-05-12 Part-Offer alias normalization 보강
-
-작업:
-- `lib/pricing/offer-match.ts`의 strict matcher에 다나와 상품명 한글/영문 alias 정규화를 추가했다.
-- MSI/엠에스아이, ASUS/에이수스, SK hynix/SK하이닉스, Micronics/마이크로닉스 등 브랜드 alias를 보강했다.
-- MORTAR/박격포, TUF/터프, VENTUS/벤투스, PULSE/펄스, Platinum P41/P41, 990 EVO/990에보 등 라인업 alias를 보강했다.
-- 12V-2x6/16핀/12VHPWR, PCIe 8핀/6+2핀, DDR5-6000/PC5-48000/2x16GB, M-ATX/mATX/Micro-ATX 표기를 정규화했다.
-- alias는 동일 상품 판단의 보조 신호로만 쓰고, 칩셋·소켓·RAM 타입·용량·속도·GPU 칩셋·VRAM·PSU 용량·ATX 버전 등 핵심 스펙 충돌이 있으면 계속 mismatch 처리한다.
-- seed Part 가격 보강은 핵심 offer 스펙이 확인될 때만 alias match를 허용해, 불확실한 가격은 붙이지 않는 정책을 유지했다.
-- `lib/parts/spec-display.ts`에서 CPU 소켓 누락 문구, RAM 키트 표기, GPU 길이/두께, PSU 커넥터 배지 표기를 보강했다.
-
-주요 파일:
-- `lib/pricing/offer-match.ts`
-- `lib/pricing/offer-match.test.ts`
-- `lib/parts/spec-display.ts`
-- `docs/work-trigger.md`
-
-테스트:
-- B650M MORTAR/박격포, ASUS TUF/터프, ESSENCORE KLEVV/에센코어 클레브, SK hynix P41/SK하이닉스 P41, Samsung 990 EVO/삼성 990에보, Micronics/마이크로닉스, MSI VENTUS/벤투스, Sapphire PULSE/펄스, ARCTIC/아틱, 3RSYS L600 블랙 alias match 테스트를 추가했다.
-- B650↔B760/B850, DDR5↔DDR4, 32GB↔64GB, DDR5-6000↔DDR5-5600, P41↔P310, 1TB↔500GB, 850W↔750W, ATX3.1↔ATX2.x, RTX5070↔RTX5080/5070Ti, 360mm↔240mm, L600↔L330 mismatch 회귀 테스트를 추가했다.
-
-검증:
-- `pnpm test` 성공
-- `pnpm lint` 성공
-- `pnpm build` 성공
-
-남은 한계:
-- alias가 늘어도 live 다나와 상품명 변형을 100% 커버할 수 없다.
-- 안전 우선 정책상 일부 정상 가격 매칭이 누락될 수 있다.
-- 실제 snapshot 로그를 수집해 alias와 parser를 점진적으로 보강해야 한다.
-
-### 2026-05-12 Part-Offer strict matching과 표시명 고정
-
-작업:
-- `lib/pricing/offer-match.ts`를 추가해 `isStrictSameProductOffer()`와 `getOfferMatchDiagnostics()`를 도입했다.
-- `offer.partId === part.id`만으로 가격을 붙이지 않고 카테고리별 핵심 스펙 충돌을 먼저 검사한다.
-- B650 seed 보드에 B760 offer, DDR5 seed RAM에 DDR4 offer, SK hynix P41 seed SSD에 Crucial P310 offer, RTX 5070 seed GPU에 RTX 5080 offer가 붙지 않도록 막았다.
-- `candidates.ts`와 `build-summary.ts`의 중복 fuzzy matcher를 제거하고 strict matcher를 공통 사용하도록 바꿨다.
-- 후보 카드 제목은 항상 `candidate.part.name`으로 표시하고, `bestOffer.productName`은 `가격 매칭 상품` 보조 정보로만 표시한다.
-- 최종 견적 item 이름은 항상 `item.part.name`을 사용하고, offer 상품명은 가격 매칭 상품명으로만 표시한다.
-- `RecommendationCandidate`에 `offerMatch`와 `display` 필드를 추가했다.
-- `lib/parts/spec-display.ts`를 추가해 CPU/보드/RAM/GPU/케이스/PSU/쿨러/SSD 핵심 스펙 배지를 생성한다.
-- 후보 카드와 최종 견적에 핵심 스펙 배지를 표시했다.
-- 빌더에 `자동 추천 견적 생성` 버튼을 추가해 `createRecommendedBuildAssembly()` 결과를 실제 `selectedPartIds`에 반영하도록 연결했다.
-- 선택된 anchor에 따른 hard block 후보는 기존 compatibility context를 통해 role에서 제외되며, AM5 CPU 선택 시 LGA 보드, DDR5 보드 선택 시 DDR4 RAM이 role에 들어가지 않는 회귀 테스트를 추가했다.
-
-주요 파일:
-- `lib/pricing/offer-match.ts`
-- `lib/pricing/offer-match.test.ts`
-- `lib/parts/spec-display.ts`
-- `lib/recommendation/candidates.ts`
-- `lib/recommendation/candidates.test.ts`
-- `lib/summary/build-summary.ts`
-- `lib/summary/build-summary.test.ts`
-- `components/builder/builder-flow.tsx`
-- `components/summary/summary-view.tsx`
-- `types/diagnosis.ts`
-- `docs/work-trigger.md`
-
-검증:
-- `pnpm test` 성공
-- `pnpm lint` 성공
-- `pnpm build` 성공
-
-다음 작업:
-- strict matcher를 실제 다나와 live snapshot으로 검증하고 브랜드/라인업 예외 토큰을 보강한다.
-- assembly 실패 사유를 UI에 더 구체적으로 표시한다.
-- 제조사 support list 기반 BIOS 최소 버전 데이터로 CPU-보드 룰을 고도화한다.
 
 ## 보존 기록
 

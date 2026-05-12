@@ -160,18 +160,37 @@ function createCoolerSpecs(offer: PriceOffer): PartSpecs {
 
 function createCpuSpecs(offer: PriceOffer): PartSpecs {
   const text = specText(offer);
+  const cores = parseCpuCores(offer, text);
 
   return {
     kind: "cpu",
     socket: normalizeSocket(readString(offer, "cpuSocket")) ?? inferCpuSocketFromName(offer.productName),
     generation: readString(offer, "cpuGeneration") ?? inferCpuGeneration(offer.productName),
     series: readString(offer, "cpuSeries") ?? inferCpuSeries(offer.productName),
-    cores: extractNumber(readString(offer, "cpuCoreText") ?? text, /(\d+)/),
-    threads: extractNumber(readString(offer, "cpuThreadText") ?? text, /(\d+)/),
+    cores,
+    threads: parseCpuThreads(offer, text, cores),
     tdpW: readNumber(offer, "cpuTdpW"),
     gamingTier: estimateCpuTier(offer.productName),
     productivityTier: estimateCpuTier(offer.productName),
   };
+}
+
+function parseCpuCores(offer: PriceOffer, text: string) {
+  return (
+    readNumber(offer, "cpuCores") ??
+    extractNumber(readString(offer, "cpuCoreText") ?? "", /(\d+)\s*(?:코어|core|cores|C\b)/i) ??
+    extractNumber(text, /(\d+)\s*(?:코어|core|cores|C\b)/i)
+  );
+}
+
+function parseCpuThreads(offer: PriceOffer, text: string, cores?: number) {
+  const threads =
+    readNumber(offer, "cpuThreads") ??
+    extractNumber(readString(offer, "cpuThreadText") ?? "", /(\d+)\s*(?:스레드|쓰레드|thread|threads|T\b)/i) ??
+    extractNumber(text, /(\d+)\s*(?:스레드|쓰레드|thread|threads|T\b)/i);
+
+  if (threads !== undefined && cores !== undefined && threads < cores) return undefined;
+  return threads;
 }
 
 function createClassification(category: PartCategory, offer: PriceOffer): PartClassification {

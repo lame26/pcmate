@@ -27,6 +27,7 @@ export function CompatibilityDetails({
   compact = false,
 }: CompatibilityDetailsProps) {
   const rows = createCompatibilityCheckRows(result, selectedParts);
+  const visibleRows = compact ? rows.filter((row) => row.status !== "compatible") : rows;
 
   return (
     <section className={cn("rounded-md border bg-background text-foreground", compact ? "p-3" : "p-4")}>
@@ -43,6 +44,11 @@ export function CompatibilityDetails({
             <p className="text-sm leading-6 text-muted-foreground">
               {getResultMessage(result)}
             </p>
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              <SummaryBadge tone="blocked" label={`차단 ${result.summary.critical}건`} />
+              <SummaryBadge tone="needs-check" label={`구매 전 확인 ${result.summary.needsCheck}건`} />
+              {compact ? <SummaryBadge tone="muted" label="통과 항목은 접힌 상세에서 생략" /> : null}
+            </div>
           </div>
           <ChevronDown className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-open/details:rotate-180" aria-hidden="true" />
         </summary>
@@ -54,20 +60,37 @@ export function CompatibilityDetails({
             <PolicyBadge label="복사/저장" allowed={result.canExport} blockedText="내보내기 제한" />
           </div>
 
-          {rows.length ? (
+          {visibleRows.length ? (
             <div className="grid gap-2">
-              {rows.map((row) => (
+              {visibleRows.map((row) => (
                 <CompatibilityRowView key={row.id} row={row} />
               ))}
             </div>
           ) : (
             <div className="rounded-md border border-dashed bg-muted/20 p-3 text-sm leading-6 text-muted-foreground">
-              아직 표시할 조합이 없습니다. 부품을 선택하면 행 단위로 확인합니다.
+              {rows.length
+                ? "차단 또는 구매 전 확인이 필요한 항목은 없습니다. 통과 항목은 후보 카드 compact 상세에서 생략했습니다."
+                : "아직 표시할 조합이 없습니다. 부품을 선택하면 행 단위로 확인합니다."}
             </div>
           )}
         </div>
       </details>
     </section>
+  );
+}
+
+function SummaryBadge({ tone, label }: { tone: "blocked" | "needs-check" | "muted"; label: string }) {
+  return (
+    <span
+      className={cn(
+        "rounded-md px-2 py-0.5 font-medium",
+        tone === "blocked" ? "bg-red-100 text-red-950" : "",
+        tone === "needs-check" ? "bg-amber-100 text-amber-950" : "",
+        tone === "muted" ? "bg-muted text-muted-foreground" : ""
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -144,11 +167,11 @@ function StatusIcon({ status }: { status: CompatibilityDisplayStatus }) {
 
 function getResultMessage(result: CompatibilityResult) {
   if (result.status === "blocked") {
-    return `차단 ${result.summary.critical}건이 있어 추천 또는 구매 흐름에서 제한됩니다. 아래 행에서 어떤 조합이 막혔는지 확인하세요.`;
+    return `차단 ${result.summary.critical}건이 있어 추천 또는 구매 흐름에서 제한됩니다. 구매 전 막힌 조합을 먼저 해결해야 합니다.`;
   }
 
   if (result.status === "needs-check") {
-    return `확인 필요 ${result.summary.needsCheck}건이 남아 있습니다. 이유와 구매 전 확인할 항목을 함께 표시합니다.`;
+    return `구매 전 확인 ${result.summary.needsCheck}건이 남아 있습니다. 펼치면 이유와 확인할 항목을 볼 수 있습니다.`;
   }
 
   return "현재 입력된 스펙 데이터 기준으로 알려진 blocker는 없습니다. 실제 구매 전 판매 페이지의 최신 스펙은 다시 확인하세요.";

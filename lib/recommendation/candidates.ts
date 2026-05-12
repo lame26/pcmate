@@ -53,7 +53,8 @@ export function createRecommendationCandidates(input: CandidateInput): Recommend
       scores.preferenceScore * scoreRules.recommendationWeights.preferenceScore +
       scores.classificationScore * scoreRules.recommendationWeights.classificationScore;
     const confidenceAdjustment = (scores.specConfidenceScore - 70) * 0.08 + (scores.priceConfidenceScore - 70) * 0.06;
-    const totalScore = Math.round(Math.max(0, Math.min(100, weightedScore + confidenceAdjustment)));
+    const priceAvailabilityAdjustment = effectivePrice ? 0 : -14;
+    const totalScore = Math.round(Math.max(0, Math.min(100, weightedScore + confidenceAdjustment + priceAvailabilityAdjustment)));
 
     return {
       id: `${part.id}-candidate`,
@@ -80,7 +81,7 @@ export function createRecommendationCandidates(input: CandidateInput): Recommend
     };
   });
 
-  return assignRoles(scored);
+  return assignRoles(scored, input, selectedParts);
 }
 
 export function getBuilderCategories() {
@@ -91,20 +92,302 @@ function mergeParts(seedParts: Part[], dynamicParts: Part[]) {
   return Array.from(new Map([...seedParts, ...dynamicParts].map((part) => [part.id, part])).values());
 }
 
-function assignRoles(candidates: RecommendationCandidate[]) {
+function assignRoles(
+  candidates: RecommendationCandidate[],
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>
+) {
   const usable = candidates
     .filter((candidate) => candidate.eligibility.eligible)
     .sort((left, right) => right.totalScore - left.totalScore);
+  const policyPool = usable.filter((candidate) => isWithinCategoryPolicy(candidate, input, selectedParts));
+  const boundedPool = policyPool.length ? policyPool : usable;
+  const pricedPool = boundedPool.filter((candidate) => candidate.effectivePrice !== undefined);
+  const rolePool = pricedPool.length ? pricedPool : boundedPool;
   const selected = new Map<string, RecommendationCandidate>();
-  const budget = [...usable].sort((left, right) => (left.effectivePrice ?? Infinity) - (right.effectivePrice ?? Infinity))[0];
-  const recommended = usable[0];
-  const premium = [...usable].sort((left, right) => getPartPerformanceTier(right.part) - getPartPerformanceTier(left.part))[0];
-
+  const budget = pickRoleCandidate(rolePool, "budget", input, selectedParts, selected);
   if (budget) selected.set(budget.part.id, { ...budget, role: "budget" });
+
+  const recommended = pickRoleCandidate(rolePool, "recommended", input, selectedParts, selected);
   if (recommended) selected.set(recommended.part.id, { ...recommended, role: "recommended" });
+
+  const premium = pickRoleCandidate(rolePool, "premium", input, selectedParts, selected);
   if (premium) selected.set(premium.part.id, { ...premium, role: "premium" });
 
   return Array.from(selected.values()).sort((left, right) => roleSort(left.role) - roleSort(right.role));
+}
+
+function pickRoleCandidate(
+  candidates: RecommendationCandidate[],
+  role: RecommendationCandidate["role"],
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>,
+  selected: Map<string, RecommendationCandidate>
+) {
+  const available = candidates.filter((candidate) => !selected.has(candidate.part.id));
+  const roleBand = available.filter((candidate) => isInRoleBand(candidate, role, input, selectedParts));
+  const pool = roleBand.length ? roleBand : available;
+
+  return pool.sort((left, right) => compareForRole(left, right, role, input, selectedParts))[0];
+}
+
+function compareForRole(
+  left: RecommendationCandidate,
+  right: RecommendationCandidate,
+  role: RecommendationCandidate["role"],
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>
+) {
+  const leftDistance = getRoleDistance(left, role, input, selectedParts);
+  const rightDistance = getRoleDistance(right, role, input, selectedParts);
+
+  if (role === "budget") {
+    return (
+      (left.effectivePrice ?? Infinity) - (right.effectivePrice ?? Infinity) ||
+      leftDistance - rightDistance ||
+      right.totalScore - left.totalScore
+    );
+  }
+
+  return (
+    leftDistance - rightDistance ||
+    right.totalScore - left.totalScore ||
+    (left.effectivePrice ?? Infinity) - (right.effectivePrice ?? Infinity)
+  );
+}
+
+function isWithinCategoryPolicy(
+  candidate: RecommendationCandidate,
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>
+) {
+  const specs = candidate.part.specs;
+
+  if (specs.kind === "cpu") {
+    const tier = specs.gamingTier ?? getPartPerformanceTier(candidate.part);
+    const minTier = input.requirement.cpuTier >= 7 ? input.requirement.cpuTier - 1 : Math.max(5, input.requirement.cpuTier);
+    const maxTier = Math.min(input.requirement.cpuTier + 1, allowsHaloCpu(input) ? 10 : 9);
+
+    if (isLegacyMainstreamCpu(candidate.part, input)) return false;
+    if (isHaloCpu(candidate.part) && !allowsHaloCpu(input)) return false;
+    return tier >= minTier && tier <= maxTier;
+  }
+
+  if (specs.kind === "gpu") {
+    const tier = specs.gamingTier ?? getPartPerformanceTier(candidate.part);
+    const minTier = Math.max(5, input.requirement.gpuTier - 1);
+    const maxTier = Math.min(input.requirement.gpuTier + 1, allowsHaloGpu(input) ? 10 : 9);
+
+    if (specs.vramGb && specs.vramGb < input.requirement.vramGb) return false;
+    return tier >= minTier && tier <= maxTier;
+  }
+
+  if (specs.kind === "ssd") {
+    return (specs.capacityGb ?? 0) >= getMinimumSsdCapacityGb(input);
+  }
+
+  if (specs.kind === "psu") {
+    const wattage = specs.wattage ?? 0;
+    const targetWattage = getTargetPsuWattage(input, selectedParts);
+    const maxWattage = targetWattage >= 900 ? targetWattage + 300 : targetWattage + 250;
+
+    if (wattage < targetWattage) return false;
+    if (wattage >= 1200 && targetWattage < 1000) return false;
+    return wattage <= maxWattage;
+  }
+
+  if (specs.kind === "ram") {
+    const capacity = specs.totalGb ?? 0;
+
+    if (capacity < input.requirement.ramGb) return false;
+    if (capacity > input.requirement.ramGb * 2) return false;
+    if (input.requirement.ramGb <= 32 && capacity > 64) return false;
+    return true;
+  }
+
+  if (specs.kind === "cooler") {
+    if (specs.radiatorSizeMm && specs.radiatorSizeMm >= 360 && !allowsLargeLiquidCooler(input, selectedParts)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  if (specs.kind === "case") {
+    const targetGpuLengthMm = getTargetGpuLengthMm(input, selectedParts);
+
+    return !targetGpuLengthMm || (specs.maxGpuLengthMm ?? 0) >= targetGpuLengthMm;
+  }
+
+  return true;
+}
+
+function isInRoleBand(
+  candidate: RecommendationCandidate,
+  role: RecommendationCandidate["role"],
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>
+) {
+  const specs = candidate.part.specs;
+
+  if (specs.kind === "cpu" || specs.kind === "gpu") {
+    const tier = getPartPerformanceTier(candidate.part);
+    const requiredTier = specs.kind === "cpu" ? input.requirement.cpuTier : input.requirement.gpuTier;
+
+    if (role === "budget") return tier >= requiredTier - 1 && tier <= requiredTier;
+    if (role === "recommended") return Math.abs(tier - requiredTier) <= 1;
+    return tier > requiredTier && tier <= requiredTier + 1;
+  }
+
+  if (specs.kind === "ssd") {
+    const capacity = specs.capacityGb ?? 0;
+    if (role === "premium") return capacity >= 2000;
+    return capacity >= getMinimumSsdCapacityGb(input) && capacity <= 1000;
+  }
+
+  if (specs.kind === "psu") {
+    const wattage = specs.wattage ?? 0;
+    const target = getTargetPsuWattage(input, selectedParts);
+    if (role === "budget") return wattage >= target && wattage <= target + 100;
+    if (role === "recommended") return wattage >= target && wattage <= target + 150;
+    return wattage > target && wattage <= target + 300;
+  }
+
+  if (specs.kind === "ram") {
+    if (role === "premium") return (specs.totalGb ?? 0) >= input.requirement.ramGb;
+    return specs.totalGb === input.requirement.ramGb;
+  }
+
+  if (specs.kind === "cooler") {
+    if (role === "premium") return allowsLargeLiquidCooler(input, selectedParts) ? true : specs.radiatorSizeMm !== 360;
+    return specs.radiatorSizeMm !== 360;
+  }
+
+  return true;
+}
+
+function getRoleDistance(
+  candidate: RecommendationCandidate,
+  role: RecommendationCandidate["role"],
+  input: CandidateInput,
+  selectedParts: Partial<Record<PartCategory, Part>>
+) {
+  const specs = candidate.part.specs;
+
+  if (specs.kind === "cpu" || specs.kind === "gpu") {
+    const tier = getPartPerformanceTier(candidate.part);
+    const requiredTier = specs.kind === "cpu" ? input.requirement.cpuTier : input.requirement.gpuTier;
+    const target = role === "budget" ? requiredTier : role === "recommended" ? requiredTier : Math.min(requiredTier + 1, 10);
+
+    return Math.abs(tier - target);
+  }
+
+  if (specs.kind === "ssd") {
+    const target = role === "premium" ? 2000 : 1000;
+    return Math.abs((specs.capacityGb ?? 0) - target) / 1000;
+  }
+
+  if (specs.kind === "psu") {
+    const target = getTargetPsuWattage(input, selectedParts) + (role === "premium" ? 150 : 0);
+    return Math.abs((specs.wattage ?? 0) - target) / 100;
+  }
+
+  if (specs.kind === "ram") {
+    const target = role === "premium" && input.requirement.ramGb >= 32 ? input.requirement.ramGb * 2 : input.requirement.ramGb;
+    return Math.abs((specs.totalGb ?? 0) - target) / 32;
+  }
+
+  if (specs.kind === "cooler") {
+    const target = getCoolerTargetTier(input, selectedParts);
+    return Math.abs(getCoolerTier(candidate.part) - target);
+  }
+
+  return Math.max(0, 100 - candidate.totalScore) / 100;
+}
+
+function isLegacyMainstreamCpu(part: Part, input: CandidateInput) {
+  if (input.profile.buildMode !== "full-build" || input.requirement.cpuTier < 6 || part.specs.kind !== "cpu") return false;
+
+  const tier = part.specs.gamingTier ?? getPartPerformanceTier(part);
+  const seriesText = `${part.specs.series ?? ""} ${part.specs.generation ?? ""} ${part.name}`;
+
+  return tier <= 6 && (part.specs.socket === "AM4" || /Ryzen\s*5000|5[0-9]{3}/i.test(seriesText));
+}
+
+function isHaloCpu(part: Part) {
+  const text = `${part.name} ${part.model}`;
+
+  return /(?:Ryzen\s*)?(?:9\s*)?(?:7950X3D|7900X3D|9950X3D|9850X3D)/i.test(text);
+}
+
+function allowsHaloCpu(input: CandidateInput) {
+  return (
+    input.requirement.cpuTier >= 10 ||
+    input.requirement.ramGb >= 64 ||
+    input.requirement.psuWattage >= 1000 ||
+    hasEnthusiastBudget(input) ||
+    hasEnthusiastRequirementText(input)
+  );
+}
+
+function allowsHaloGpu(input: CandidateInput) {
+  return (
+    input.requirement.gpuTier >= 10 ||
+    input.requirement.psuWattage >= 1000 ||
+    hasEnthusiastBudget(input) ||
+    hasEnthusiastRequirementText(input)
+  );
+}
+
+function hasEnthusiastBudget(input: CandidateInput) {
+  return Boolean(input.profile.budget && input.profile.budget.flexible && input.profile.budget.totalKrw >= 4000000);
+}
+
+function hasEnthusiastRequirementText(input: CandidateInput) {
+  const text = [...input.requirement.reasons, ...input.requirement.warnings.map((warning) => warning.message)].join(" ");
+
+  return /4K|UHD|UWQHD|VR|local\s*AI|AI|enthusiast|extreme|로컬\s*AI|고사양\s*AI|초고사양/i.test(text);
+}
+
+function getMinimumSsdCapacityGb(input: CandidateInput) {
+  return input.profile.buildMode === "full-build" ? 1000 : 500;
+}
+
+function getTargetPsuWattage(input: CandidateInput, selectedParts: Partial<Record<PartCategory, Part>>) {
+  const selectedGpu = selectedParts.gpu?.specs;
+  const gpuWattage = selectedGpu?.kind === "gpu" ? selectedGpu.recommendedPsuW : undefined;
+
+  return Math.max(input.requirement.psuWattage, gpuWattage ?? 0);
+}
+
+function getTargetGpuLengthMm(input: CandidateInput, selectedParts: Partial<Record<PartCategory, Part>>) {
+  const selectedGpu = selectedParts.gpu?.specs;
+
+  if (selectedGpu?.kind === "gpu" && selectedGpu.lengthMm) return selectedGpu.lengthMm;
+  if (input.requirement.gpuTier >= 9) return 320;
+  if (input.requirement.gpuTier >= 8) return 300;
+  if (input.requirement.gpuTier >= 7) return 280;
+  return undefined;
+}
+
+function allowsLargeLiquidCooler(input: CandidateInput, selectedParts: Partial<Record<PartCategory, Part>>) {
+  const selectedCpu = selectedParts.cpu?.specs;
+  const selectedCpuTier = selectedCpu?.kind === "cpu" ? selectedCpu.gamingTier ?? 0 : 0;
+  const selectedCpuTdp = selectedCpu?.kind === "cpu" ? selectedCpu.tdpW ?? 0 : 0;
+
+  return input.preferences.cooling === "liquid" || input.requirement.cpuTier >= 8 || selectedCpuTier >= 8 || selectedCpuTdp >= 120;
+}
+
+function getCoolerTargetTier(input: CandidateInput, selectedParts: Partial<Record<PartCategory, Part>>) {
+  return allowsLargeLiquidCooler(input, selectedParts) ? 3 : 2;
+}
+
+function getCoolerTier(part: Part) {
+  if (part.specs.kind !== "cooler") return 2;
+  if (part.specs.radiatorSizeMm && part.specs.radiatorSizeMm >= 360) return 3;
+  if (part.specs.coolingCapacityTier === "strong") return 3;
+  if (part.specs.coolingCapacityTier === "adequate" || part.specs.type === "air") return 2;
+  return 1;
 }
 
 function createScores(
@@ -312,7 +595,9 @@ function findBestOffer(part: Part, snapshots: PriceSnapshot[], selectedCardProvi
     .filter((offer) => isStrictSameProductOffer(part, offer))
     .filter((offer) => isOfferEligibleForRecommendation(offer))
     .filter((offer) => isPriceSaneForRecommendation(offer, part.category, categoryOffers));
-  const offers = snapshotOffers.length ? snapshotOffers : part.offers.filter(isFallbackOfferEligibleForRecommendation);
+  const offers = snapshotOffers.length
+    ? snapshotOffers
+    : part.offers.filter((offer) => isFallbackOfferEligibleForRecommendation(offer, part.category));
 
   return offers.sort((left, right) => getOfferPrice(left, selectedCardProviderIds) - getOfferPrice(right, selectedCardProviderIds))[0];
 }
@@ -338,9 +623,13 @@ function isOfferEligibleForRecommendation(offer: PriceOffer) {
   return true;
 }
 
-function isFallbackOfferEligibleForRecommendation(offer: PriceOffer) {
-  if (offer.source.type === "static") return false;
+function isFallbackOfferEligibleForRecommendation(offer: PriceOffer, category: PartCategory) {
+  if (offer.source.type === "static") return isSafeStaticSeedPriceFallback(offer, category);
   return isOfferEligibleForRecommendation(offer);
+}
+
+function isSafeStaticSeedPriceFallback(offer: PriceOffer, category: PartCategory) {
+  return (category === "ram" || category === "ssd") && offer.basePrice > 0 && isOfferEligibleForRecommendation(offer);
 }
 
 function isCandidatePoolEligible(part: Part) {
